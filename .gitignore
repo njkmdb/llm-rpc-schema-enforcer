@@ -1,0 +1,42 @@
+# ==========================================
+# ==========================================
+
+# 1. Python / Environment
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.env
+
+# 2. Database & Telemetry Logs (상태 및 로그 유출 방어)
+*.db
+*.sqlite3
+*.db-shm
+*.db-wal
+*-journal
+*.log
+nohup.out
+
+# 3. IDE & OS configs (로컬 작업자 환경 유출 방어)
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 4. Internal Documentation & Temp Scripts (내부 기획/임시 도구 격리)
+CoreStudy.txt
+CoreDocu.txt
+CoreMemo.txt
+file_list.txt
+folder_list.txt
+full_architecture_context.txt
+merge_code.py
