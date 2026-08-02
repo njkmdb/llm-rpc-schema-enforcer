@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Union
 
 # =====================================================================
 # [LRSE Middleware Schema Definitions]
@@ -29,11 +29,22 @@ class LlmRpcResponse(BaseModel):
         ..., 
         description="RPC 호출 상태 (success, fallback, error)"
     )
-    validated_data: Dict[str, Any] = Field(
+    validated_data: Union[Dict[str, Any], List[Any]] = Field(
         default_factory=dict, 
-        description="Pydantic 스키마 검증을 무사히 통과한 무결한 JSON 객체"
+        description="Pydantic 스키마 검증을 무사히 통과한 무결한 JSON 객체 또는 배열"
     )
     message: Optional[str] = Field(
         None, 
         description="성공 로그 또는 오류 발생 시의 상세 에러 메시지"
     )
+
+class LlmSessionInitRequest(BaseModel):
+    """클라우드 원격 세션 초기화 및 시드 데이터 주입을 위한 요청 페이로드"""
+    session_id: str = Field(..., description="초기화할 세션 ID")
+    session_secret: str = Field(..., description="세션 비밀번호")
+    custom_seed: Optional[List[Dict[str, Any]]] = Field(
+        None, 
+        description="주입할 초기 엔티티 데이터(JSON 배열). 도메인 특화 스키마나 초기 지식 데이터 등을 포함할 수 있습니다."
+    )
+    api_key: Optional[str] = Field(None, description="클라이언트 환경에 따른 선택적 API 키")
+    model_name: Optional[str] = Field(None, description="클라이언트 환경에 따른 선택적 모델명")

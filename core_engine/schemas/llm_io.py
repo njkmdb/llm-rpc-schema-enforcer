@@ -1,32 +1,6 @@
 from typing import Any, Dict, List, Optional
 from enum import Enum
 from pydantic import BaseModel, Field
-from typing import Literal
-
-AllowedEntityID = Literal[
-    "master_node_01", "worker_node_a", "worker_node_b", "proxy_gateway", 
-    "firewall_module", "database_cluster", "auth_server", "cache_redis", "message_queue"
-]
-
-AllowedTags = Literal[
-    "active", "standby", "compromised", "secure", "load_balanced", 
-    "high_priority", "deprecated", "anomaly"
-]
-
-class Position(BaseModel):
-    x: int = Field(..., ge=0, le=15, description="그리드 X 좌표 (0-15 제한)")
-    y: int = Field(..., ge=0, le=15, description="그리드 Y 좌표 (0-15 제한)")
-
-class DynamicEntity(BaseModel):
-    id: AllowedEntityID
-    type: Literal["module", "node"]
-    attributes: Dict[str, Any] = Field(default_factory=dict)
-    tags: List[AllowedTags] = Field(default_factory=list)
-    position: Position
-
-class InfrastructureProvisioningOutput(BaseModel):
-    """LLM이 분석을 마치고 시스템에 반환하는 최종 동적 인프라 배포 배열"""
-    dynamic_entities: List[DynamicEntity] = Field(..., description="동적으로 배포할 컨테이너/노드 인스턴스 배열")
 
 class UniversalEntity(BaseModel):
     id: str = Field(..., description="엔티티의 고유 식별자.")

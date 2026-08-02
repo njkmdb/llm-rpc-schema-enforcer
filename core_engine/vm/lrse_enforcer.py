@@ -6,7 +6,11 @@ Pydantic 스키마 검증과 자동 재시도(Retry) 메커니즘을 결합하�
 
 import logging
 import time
-from typing import TypeVar, Type
+import json
+import jsonschema
+import copy
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
+from typing import TypeVar, Type, Union, Dict, Any
 from pydantic import BaseModel, ValidationError
 from google import genai
 from google.genai import types
@@ -26,13 +30,23 @@ class LlmRpcSchemaEnforcer:
         self.client = genai.Client(api_key=api_key)
         self.model_name = model_name
 
-    def call_rpc(self, context_payload: str, response_schema: Type[T], system_instruction: str = "", max_retries: int = 3) -> T:
+    def call_rpc(self, context_payload: str, response_schema: Union[Type[T], Dict[str, Any]], system_instruction: str = "", max_retries: int = 3) -> Union[T, Dict[str, Any]]:
         """
         LLM에 RPC 요청을 보내고, 지정된 스키마로 100% 검증된 데이터 객체를 반환합니다.
         실패 시 에러 컨텍스트를 주입하여 자가 교정(Self-correction) 재시도를 수행합니다.
         """
-        # 1. Pydantic 스키마를 JSON Schema 명세로 자동 추출
-        schema_definition = response_schema.model_json_schema()
+        # 1. 스키마 추출 분기 (Pydantic 모델 vs 원시 JSON Schema 딕셔너리)
+        if isinstance(response_schema, dict):
+            schema_definition = response_schema
+            is_dynamic_schema = True
+        else:
+            schema_definition = response_schema.model_json_schema()
+            is_dynamic_schema = False
+            
+        # 💡 [핵심 패치] Gemini SDK가 거부하는 메타데이터 키 제거 (안전한 복사본 사용)
+        gemini_safe_schema = copy.deepcopy(schema_definition)
+        if "$schema" in gemini_safe_schema:
+            del gemini_safe_schema["$schema"]
         
         strict_instruction = (
             f"{system_instruction}\n\n"
@@ -54,14 +68,22 @@ class LlmRpcSchemaEnforcer:
                     config=types.GenerateContentConfig(
                         system_instruction=strict_instruction,
                         response_mime_type="application/json", 
-                        temperature=0.0 # 환각 방어를 위한 온도 고정
+                        temperature=0.0, # 환각 방어를 위한 온도 고정
+                        # 💡 원본 대신 정제된 스키마 전달
+                        response_schema=gemini_safe_schema 
                     )
                 )
                 
-                # 💡 [핵심 방어선] Pydantic을 통한 완벽한 스키마 유효성 검증
-                return response_schema.model_validate_json(response.text)
+                # 💡 [핵심 방어선] 검증 방식 분기 처리 (검증 시에는 원본 스키마 사용)
+                if is_dynamic_schema:
+                    # 동적 스키마의 경우 jsonschema 패키지를 통한 완벽한 규격 검증
+                    parsed_json = json.loads(response.text)
+                    jsonschema.validate(instance=parsed_json, schema=schema_definition)
+                    return parsed_json
+                else:
+                    return response_schema.model_validate_json(response.text)
                 
-            except ValidationError as val_err:
+            except (ValidationError, JsonSchemaValidationError, json.JSONDecodeError) as val_err:
                 last_error = val_err
                 logger.warning(f"[LRSE Security Block] 시도 {attempt}/{max_retries} - 스키마 규격 위반 감지: {val_err}")
                 

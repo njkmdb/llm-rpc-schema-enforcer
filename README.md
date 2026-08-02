@@ -1,6 +1,6 @@
-# LRSE (LLM RPC Schema Enforcer) v0.1.0
+# LRSE (LLM RPC Schema Enforcer) v0.2.0
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/njkmdb/llm-rpc-schema-enforcer)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/njkmdb/llm-rpc-schema-enforcer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688.svg)](https://fastapi.tiangolo.com)
@@ -8,6 +8,8 @@
 > **"LLM 호출을 스키마 기반의 백엔드 RPC로 취급하여, AI의 비결정론적 출력을 규격화된 JSON 데이터로 변환하는 미들웨어"**
 
 **LLM RPC Schema Enforcer (LRSE)**는 대형 언어 모델(LLM)의 비결정론적 출력과 환각(Hallucination) 현상을 제어하기 위해 설계된 백엔드 미들웨어입니다. 클라이언트 애플리케이션과 분리된 원격 프로시저 호출(RPC) 서버 형태로 동작합니다.
+
+---
 
 ## 핵심 아키텍처 철학 (Core Philosophy)
 
@@ -23,15 +25,31 @@
 
 ### 1. 스키마 기반 출력 제어 (Schema Enforcement)
 서버 레지스트리에 등록된 Pydantic 모델에서 JSON Schema 명세를 추출하여 LLM에 전달합니다. 반환되는 데이터가 사전에 정의된 JSON 규격을 준수하도록 관리합니다.
+* **네이티브 스키마 방어적 도입:** Gemini API의 `response_schema`를 1차로 시도하되, 복잡한 스키마 제약으로 인한 API 에러를 방지하기 위해 기존 텍스트 파싱 및 재시도 로직으로 즉각 Fallback 되도록 이중화하여 안정성을 극대화했습니다.
 
 ### 2. 범용 RPC 라우터 (RPC Gateway)
 FastAPI 기반의 API 게이트웨이를 제공합니다. 다양한 클라이언트 앱은 도메인 스키마 이름과 컨텍스트만으로 AI 추론 결과를 요청할 수 있습니다.
+* **API 스키마 유연성 확보:** `/api/v1/session/init` 엔드포인트에서 불필요한 `api_key`, `model_name` 파라미터를 `Optional`로 변경하여 클라이언트 종속성을 제거했습니다.
 
 ### 3. 자동 재시도 로직 (Retry Loop)
 Pydantic 검증 실패(`ValidationError`) 발생 시, 빈 데이터를 반환하는 대신 에러 로그를 LLM에 피드백합니다. 최대 3회까지 데이터를 다시 생성하도록 요청하여 구조를 교정합니다.
 
 ### 4. Append-Only 상태 관리 (State Manager)
 데이터를 직접 덮어쓰기(UPDATE)하지 않고, 전체 스냅샷 복제 후 포인터를 변경합니다. 다중 버전 동시성 제어(MVCC) 방식을 사용하여 상태를 안전하게 관리합니다.
+* **낙관적 락(Optimistic Lock) 도입:** SQLite 환경에서 발생할 수 있는 동시성 이슈를 방어하기 위해 세션 메타데이터에 버전을 대조하는 가벼운 낙관적 락 메커니즘을 추가했습니다.
+* **삭제 로직 지원:** 상태 스냅샷 업데이트 시 `DESTROY_ENTITY` 액션을 통한 엔티티 삭제 명령을 안전하게 처리할 수 있도록 로직을 확장했습니다.
+
+---
+## 업데이트 내역 (Changelog)
+
+* **2026.08.02 (v0.2.0)**  
+・네이티브 스키마(`response_schema`) 및 텍스트 파싱 기반 Fallback 이중화 구조 도입  
+・SQLite 낙관적 락(Optimistic Lock) 도입을 통한 동시성 이슈 방어  
+・`DESTROY_ENTITY` 액션 처리를 통한 상태 삭제 로직 지원  
+・세션 초기화 API(`/init`)의 불필요한 파라미터(`api_key`, `model_name`) Optional 변경
+
+* **2026.07.15 (v0.1.0)**  
+・초기 릴리즈
 
 ---
 
@@ -40,7 +58,7 @@ Pydantic 검증 실패(`ValidationError`) 발생 시, 빈 데이터를 반환하
 ```text
 llm-rpc-schema-enforcer/
 ├── core_engine/                 # 무상태 백엔드 코어 시스템 (LRSE 미들웨어)
-│   ├── api/                     # FastAPI 게이트웨 및 RPC 라우터 (`main.py`)
+│   ├── api/                     # FastAPI 게이트웨이 및 RPC 라우터 (`main.py`)
 │   ├── schemas/                 # Pydantic V2 데이터 검증 및 클라이언트 스키마 레지스트리 (`api_models.py`, `llm_io.py`)
 │   ├── state/                   # SQLite 기반 Append-Only 영속성 계층 (`db_manager.py`)
 │   └── vm/                      # AI 프롬프트 어댑터 및 스키마 검증 코어 모듈 (`lrse_enforcer.py`, `interpreter.py`)
