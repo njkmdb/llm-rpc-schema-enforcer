@@ -14,7 +14,7 @@ def setup_mock_db(session_id: str):
     print("💽 [Step 1] 데이터베이스 초기 스냅샷을 생성합니다...")
     state_manager = StateManager()
     
-    # 💡 [수정됨] 커밋 전 세션과 비밀번호를 명시적으로 등록/검증합니다.
+    # 커밋 전 세션과 비밀번호를 명시적으로 등록/검증합니다.
     state_manager.verify_or_create_session(session_id, TEST_SESSION_SECRET)
     
     mock_node = UniversalEntity(
@@ -24,9 +24,11 @@ def setup_mock_db(session_id: str):
         tags=["active", "secure"]
     )
     
+    old_slot_id, _ = state_manager.get_latest_state(session_id)
     snapshot_id = state_manager.commit_turn(
         session_id=session_id,
-        active_entities=[mock_node]
+        old_slot_id=old_slot_id,
+        new_payload={"entities": [mock_node.model_dump()]}
     )
     print(f"   ✔️ 초기 상태 커밋 완료! (Snapshot ID: {snapshot_id})\n")
 
@@ -39,7 +41,7 @@ def run_api_test(session_id: str):
     url = f"http://localhost:8000/api/v1/rpc/execute"
     params = {"session_id": session_id}
     
-    # 💡 [수정됨] 환경변수에서 가져온 API 키와 세션 비밀번호를 Header에 탑재합니다.
+    # 환경변수에서 가져온 API 키와 세션 비밀번호를 Header에 탑재합니다.
     api_key = os.environ.get("GEMINI_API_KEY")
     headers = {
         "x-gemini-api-key": api_key,
@@ -54,7 +56,6 @@ def run_api_test(session_id: str):
     }
     
     try:
-        # headers 속성 추가
         response = requests.post(url, params=params, json=payload, headers=headers, timeout=30)
         
         if response.status_code == 200:

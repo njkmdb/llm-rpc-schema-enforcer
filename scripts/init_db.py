@@ -44,9 +44,11 @@ def main():
         )
         
         try:
+            old_slot_id, _ = state_manager.get_latest_state(args.session)
             snapshot_id = state_manager.commit_turn(
                 session_id=args.session,
-                active_entities=[mock_node]
+                old_slot_id=old_slot_id,
+                new_payload={"entities": [mock_node.model_dump()]}
             )
             print(f"✅ 초기 상태 커밋 완료! (Snapshot ID: {snapshot_id})")
         except Exception as e:
@@ -73,9 +75,11 @@ def main():
                 )
                 custom_entities.append(custom_entity)
 
+            old_slot_id, _ = state_manager.get_latest_state(args.session)
             snapshot_id = state_manager.commit_turn(
                 session_id=args.session,
-                active_entities=custom_entities
+                old_slot_id=old_slot_id,
+                new_payload={"entities": [ent.model_dump() for ent in custom_entities]}
             )
             print(f"✅ 커스텀 상태 커밋 완료! (Snapshot ID: {snapshot_id})")
             

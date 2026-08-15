@@ -107,6 +107,24 @@ class StateManager:
                 return current_slot_id, json.loads(slot_row["payload"])
             return current_slot_id, None
 
+    def get_entity(self, session_id: str, entity_id: str) -> Optional[Any]:
+        """
+        특정 세션의 최신 상태에서 단일 엔티티를 검색하여 반환하는 헬퍼 메서드입니다.
+        데이터베이스 스키마 특성상 전체 페이로드를 가져온 뒤 메모리에서 필터링합니다.
+        """
+        from core_engine.schemas.llm_io import UniversalEntity
+        
+        _, current_state = self.get_latest_state(session_id)
+        
+        if not current_state or "entities" not in current_state:
+            return None
+            
+        for ent_dict in current_state["entities"]:
+            if ent_dict.get("id") == entity_id:
+                return UniversalEntity(**ent_dict)
+                
+        return None
+
     def commit_turn(self, session_id: str, old_slot_id: Optional[str], new_payload: Dict[str, Any]) -> str:
         """
         새로운 상태를 Append하고 포인터를 업데이트합니다.

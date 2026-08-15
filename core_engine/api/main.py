@@ -151,14 +151,28 @@ async def execute_stateful_rpc(
             structured_command=command_batch
         )
 
-        # 낙관적 락 검증을 위해 현재 최신 상태의 old_slot_id를 가져옴
-        old_slot_id, _ = state_manager.get_latest_state(verified_session_id)
+        # 낙관적 락 검증 및 병합을 위해 현재 최신 상태를 가져옵니다.
+        old_slot_id, current_state = state_manager.get_latest_state(verified_session_id)
         
-        # 새로운 시그니처(session_id, old_slot_id, new_payload)에 맞춰 커밋
+        merged_entities_dict = {}
+        
+        # 1. 기존 스냅샷에 있던 모든 엔티티를 딕셔너리로 불러와 보존합니다.
+        if current_state and "entities" in current_state:
+            for ent_dict in current_state["entities"]:
+                merged_entities_dict[ent_dict.get("id")] = ent_dict
+                
+        # 2. 이번 턴에 LLM이 조작한 엔티티만 덮어씌웁니다 (Update).
+        for mod_ent in modified_entities:
+            merged_entities_dict[mod_ent.id] = mod_ent.model_dump()
+            
+        # 3. 보존된 엔티티와 조작된 엔티티가 병합된 최종 리스트를 생성합니다.
+        final_entities = list(merged_entities_dict.values())
+        
+        # 새로운 시그니처와 병합된 데이터(final_entities)로 커밋합니다.
         new_snapshot_id = state_manager.commit_turn(
             session_id=verified_session_id,
             old_slot_id=old_slot_id,
-            new_payload={"entities": [ent.model_dump() for ent in modified_entities]}
+            new_payload={"entities": final_entities}
         )
 
         return LlmRpcResponse(
@@ -178,6 +192,7 @@ async def execute_stateful_rpc(
     except Exception as e:
         logger.error(f"Stateful RPC Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"상태 영속화 중 오류 발생: {str(e)}")
+
 
 @app.post("/api/v1/session/init")
 async def init_session(request: LlmSessionInitRequest):
@@ -202,7 +217,7 @@ async def init_session(request: LlmSessionInitRequest):
                 )
                 entities.append(ent)
                 
-            # 💡 기존 세션 데이터가 있는지 확인하여 old_slot_id를 동적으로 할당 (재동기화 에러 방지)
+            # 기존 세션 데이터가 있는지 확인하여 old_slot_id를 동적으로 할당
             try:
                 old_slot_id, _ = state_manager.get_latest_state(request.session_id)
             except Exception:

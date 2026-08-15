@@ -54,9 +54,6 @@ class VMInterpreter:
                     self._handle_add_tag(entity, cmd)
                 elif cmd.action == ActionType.REMOVE_TAG:
                     self._handle_remove_tag(entity, cmd)
-                elif cmd.action == ActionType.DESTROY_ENTITY:
-                    # TODO: 향후 삭제(DESTROY) 로직 구현 공간
-                    pass 
                 else:
                     raise ValueError(f"Unsupported or Unknown ActionType: {cmd.action}")
 
