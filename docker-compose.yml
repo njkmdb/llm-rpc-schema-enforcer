@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  lrse-middleware:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lrse_engine
+    ports:
+      - "8081:8081"
+    volumes:
+      # SQLite 데이터베이스 파일이 날아가지 않도록 로컬과 동기화 (영속성 유지)
+      - ./lrse_state.db:/app/lrse_state.db
+      - ./session_metadata.db:/app/session_metadata.db
+    restart: unless-stopped
