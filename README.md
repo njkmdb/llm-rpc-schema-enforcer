@@ -1,76 +1,107 @@
-# LRSE (LLM RPC Schema Enforcer) v0.3.0
+# LRSE (LLM RPC Schema Enforcer)
 
+| [🇺🇸 English](README.md) | [🇰🇷 한국어](README_ko.md) | [🇯🇵 日本語](README_ja.md)
+
+![100% AI Generated](https://img.shields.io/badge/100%25_AI_Generated-8A2BE2?style=flat&logo=googlegemini&logoColor=white)
 [![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/njkmdb/llm-rpc-schema-enforcer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688.svg)](https://fastapi.tiangolo.com)
 
-> **"LLM 호출을 스키마 기반의 백엔드 RPC로 취급하여, AI의 비결정론적 출력을 규격화된 JSON 데이터로 변환하는 미들웨어"**
+> **"A middleware that treats LLM calls as schema-based backend RPCs, transforming the AI's non-deterministic outputs into standardized JSON data."**
 
-**LLM RPC Schema Enforcer (LRSE)**는 대형 언어 모델(LLM)의 비결정론적 출력과 환각(Hallucination) 현상을 제어하기 위해 설계된 백엔드 미들웨어입니다. 클라이언트 애플리케이션과 분리된 원격 프로시저 호출(RPC) 서버 형태로 동작합니다.
-
----
-
-## 핵심 아키텍처 철학 (Core Philosophy)
-
-* **결정론적 출력 제어:** Pydantic 스키마를 통해 출력 형식을 정의합니다. 모델 온도(Temperature)를 0.0으로 고정하여 일관된 결과를 유도합니다.
-* **클라이언트 분리 (Client Decoupling):** 클라이언트 애플리케이션은 프롬프트 엔지니어링이나 LLM SDK를 직접 구현할 필요가 없습니다. 필요한 데이터 스키마(JSON)와 컨텍스트 페이로드만 API로 전달하여 결과를 수신합니다.
-* **무상태 처리 (Stateless Processing):** 내부 VM 인터프리터는 데이터베이스(영속성 계층)를 직접 수정하지 않습니다. 메모리 상에서 순수 함수(Pure Function) 형태로 트랜잭션을 처리하여 원자성(Atomicity)을 유지합니다.
-* **Thick vs Thin 클라이언트 이중 지원:** 상태를 자체적으로 기억하고 복구할 수 있는 무거운 클라이언트에게는 순수 번역 기능(`/rpc/call`)만을 제공하며, 상태 보존 능력이 없는 가벼운 클라이언트(Thin Client)를 위해서는 상태 변이 및 영속화(`/rpc/execute`)까지 책임지는 유연한 아키텍처를 가집니다.
-* **BYOK 및 세션 격리 (Secure Multi-tenancy):** 클라이언트가 HTTP 헤더를 통해 개인 API 키와 세션 비밀번호를 직접 지참(BYOK)하게 하여 완벽한 테넌트 격리를 구현합니다.
-* **오류 복구 및 재시도:** LLM의 출력이 스키마 규격을 위반할 경우, 오류 내역을 프롬프트에 포함하여 재요청합니다. 이를 통해 시스템 중단을 방지하고 유효한 데이터 출력을 유도합니다.
-* **파괴적 액션의 사용자 통제 (User-Controlled Destructive Actions):** 데이터 삭제(`DESTROY_ENTITY`)와 같은 파괴적이고 돌이킬 수 없는 로직은 AI의 추론에 맡기지 않고 스키마 레벨에서 원천 차단하여, 데이터 무결성과 시스템 안전성을 보장합니다.
+**LLM RPC Schema Enforcer (LRSE)** is a backend middleware designed to control the non-deterministic outputs and hallucination phenomena of Large Language Models (LLMs). It operates in the form of a Remote Procedure Call (RPC) server separated from client applications.
 
 ---
 
-## 주요 기능 (Key Features)
+## 🚀 Getting Started (Local Execution Guide)
 
-### 1. 스키마 기반 출력 제어 (Schema Enforcement)
-서버 레지스트리에 등록된 Pydantic 모델에서 JSON Schema 명세를 추출하여 LLM에 전달합니다. 반환되는 데이터가 사전에 정의된 JSON 규격을 준수하도록 관리합니다.
-* **네이티브 스키마 방어적 도입:** Gemini API의 `response_schema`를 1차로 시도하되, 복잡한 스키마 제약으로 인한 API 에러를 방지하기 위해 기존 텍스트 파싱 및 재시도 로직으로 즉각 Fallback 되도록 이중화하여 안정성을 극대화했습니다.
+This project is configured based on Docker, allowing it to be booted up with a single command without complex Python virtual environment setups.
 
-### 2. 범용 RPC 라우터 (RPC Gateway)
-FastAPI 기반의 API 게이트웨이를 제공합니다. 다양한 클라이언트 앱은 도메인 스키마 이름과 컨텍스트만으로 AI 추론 결과를 요청할 수 있습니다.
-* **엔드포인트 분리 설계:** 클라이언트의 성격에 따라 상태 보존이 필요 없는 무상태(Stateless) 번역 엔드포인트(`/rpc/call`)와 상태를 직접 변이시키고 영속화하는 상태 유지(Stateful) 엔드포인트(`/rpc/execute`)를 분리하여 제공합니다.
-* **API 스키마 유연성 확보:** `/api/v1/session/init` 엔드포인트에서 불필요한 `api_key`, `model_name` 파라미터를 `Optional`로 변경하여 클라이언트 종속성을 제거했습니다.
+**1. Environment Variable Setup**
+Copy the `.env.example` file in the root directory to create an **`.env`** file.
+*(※ If you are using this in conjunction with the Defacto LTM-Sync system, the API key is dynamically injected from the frontend, so you can leave the inside of the file empty.)*
 
-### 3. 자동 재시도 로직 (Retry Loop)
-Pydantic 검증 실패(`ValidationError`) 발생 시, 빈 데이터를 반환하는 대신 에러 로그를 LLM에 피드백합니다. 최대 3회까지 데이터를 다시 생성하도록 요청하여 구조를 교정합니다.
+**2. Booting the Docker Container**
+Run the following command in the terminal to boot the middleware server on port 8081.
+```bash
+# Initial Boot (including image build)
+docker-compose up --build -d
 
-### 4. Append-Only 상태 관리 (State Manager)
-데이터를 직접 덮어쓰기(UPDATE)하지 않고, 전체 스냅샷 복제 후 포인터를 변경합니다. 다중 버전 동시성 제어(MVCC) 방식을 사용하여 상태를 안전하게 관리합니다.
-* **낙관적 락(Optimistic Lock) 도입:** SQLite 환경에서 발생할 수 있는 동시성 이슈를 방어하기 위해 세션 메타데이터에 버전을 대조하는 가벼운 낙관적 락 메커니즘을 추가했습니다.
-* **단일 엔티티 조회 (Helper Method):** `get_entity` 메서드를 통해 전체 스냅샷 페이로드를 가져온 뒤 메모리 상에서 필요한 엔티티만 필터링하여 빠르고 안전하게 조회할 수 있습니다.
+# Normal Boot (regular execution)
+docker-compose up -d
 
----
-## 업데이트 내역 (Changelog)
-
-* **2026.08.16 (v0.3.0)**  
-・DESTROY_ENTITY 액션 권한 스키마 레벨 원천 차단  
-・단일 엔티티 조회를 위한 get_entity 헬퍼 메서드 추가  
-・상태 증발(State Evaporation) 버그 해결 및 상태 병합(Merge) 아키텍처 도입  
-・commit_turn 파라미터 불일치 크래시 수정  
-・클라이언트 유형(Thick/Thin)에 따른 엔드포인트 역할 분담 문서화  
-
-* **2026.08.02 (v0.2.0)**  
-・네이티브 스키마(`response_schema`) 및 텍스트 파싱 기반 Fallback 이중화 구조 도입  
-・SQLite 낙관적 락(Optimistic Lock) 도입을 통한 동시성 이슈 방어  
-・세션 초기화 API(`/init`)의 불필요한 파라미터(`api_key`, `model_name`) Optional 변경
-
-* **2026.07.15 (v0.1.0)**  
-・초기 릴리즈
+# System Shutdown
+docker-compose stop
+```
 
 ---
 
-## 프로젝트 구조 (Directory Structure)
+## Core Philosophy
+
+* **Deterministic Output Control:** Defines the output format through Pydantic schemas. Induces consistent results by fixing the model temperature to 0.0.
+* **Client Decoupling:** Client applications do not need to implement prompt engineering or LLM SDKs directly. They receive results by simply passing the required data schema (JSON) and context payload via API.
+* **Stateless Processing:** The internal VM interpreter does not directly modify the database (persistence layer). It maintains atomicity by processing transactions in the form of pure functions in memory.
+* **Thick vs Thin Client Dual Support:** Provides only pure translation functions (`/rpc/call`) for heavy clients that can remember and restore state internally, while maintaining a flexible architecture responsible for state mutation and persistence (`/rpc/execute`) for lightweight clients (Thin Clients) without state preservation capabilities.
+* **BYOK and Session Isolation (Secure Multi-tenancy):** Implements perfect tenant isolation by requiring clients to directly bring their personal API keys and session passwords via HTTP headers (BYOK).
+* **Error Recovery and Retry:** If the LLM's output violates the schema specifications, it re-requests by including the error details in the prompt. This prevents system interruptions and induces valid data output.
+* **User-Controlled Destructive Actions:** Ensures data integrity and system safety by fundamentally blocking destructive and irreversible logic, such as data deletion (`DESTROY_ENTITY`), at the schema level rather than leaving it to the AI's inference.
+
+---
+
+## Key Features
+
+### 1. Schema Enforcement
+Extracts JSON Schema specifications from Pydantic models registered in the server registry and passes them to the LLM. Manages the returned data to comply with the predefined JSON specifications.
+* **Defensive Adoption of Native Schema:** Primarily attempts the Gemini API's `response_schema`, but maximizes stability by adopting a dual structure that immediately falls back to the existing text parsing and retry logic to prevent API errors caused by complex schema constraints.
+
+### 2. Universal RPC Gateway
+Provides a FastAPI-based API gateway. Various client apps can request AI inference results using only domain schema names and contexts.
+* **Endpoint Separation Design:** Depending on the nature of the client, it separates and provides a stateless translation endpoint (`/rpc/call`) that does not require state preservation, and a stateful endpoint (`/rpc/execute`) that directly mutates and persists state.
+* **Securing API Schema Flexibility:** Eliminated client dependencies by changing unnecessary `api_key` and `model_name` parameters to `Optional` in the `/api/v1/session/init` endpoint.
+
+### 3. Auto Retry Logic (Retry Loop)
+When a Pydantic validation failure (`ValidationError`) occurs, it feeds back the error log to the LLM instead of returning empty data. Requests data regeneration up to 3 times to correct the structure.
+
+### 4. Append-Only State Management (State Manager)
+Does not directly overwrite (UPDATE) data, but changes the pointer after replicating the entire snapshot. Manages state safely using the Multi-Version Concurrency Control (MVCC) method.
+* **Introduction of Optimistic Lock:** Added a lightweight optimistic lock mechanism that verifies versions in session metadata to prevent concurrency issues that can occur in SQLite environments.
+* **Single Entity Lookup (Helper Method):** Can quickly and safely lookup by fetching the entire snapshot payload through the `get_entity` method and filtering only the necessary entities in memory.
+
+---
+## Changelog
+
+* **2026.08.30 (v0.3.1)**  
+・Established a standalone execution environment based on Docker (`Dockerfile`, `docker-compose.yml`)  
+・Applied volume mounting to ensure SQLite state persistence in the container environment  
+・Fundamentally blocked API key leaks by separating `.env` files and strengthening GitHub security policies (`.gitignore`)
+
+* **2026.08.16 (v0.3.0)**
+・Fundamentally blocked `DESTROY_ENTITY` action permissions at the schema level
+・Added `get_entity` helper method for single entity lookup
+・Resolved state evaporation bug and introduced state merge architecture
+・Fixed crash due to `commit_turn` parameter mismatch
+・Documented endpoint role division according to client type (Thick/Thin)
+
+* **2026.08.02 (v0.2.0)**
+・Introduced native schema (`response_schema`) and text parsing-based fallback dual structure
+・Prevented concurrency issues by introducing SQLite Optimistic Lock
+・Changed unnecessary parameters (`api_key`, `model_name`) of the session initialization API (`/init`) to Optional
+
+* **2026.07.15 (v0.1.0)**
+・Initial release
+
+---
+
+## Directory Structure
 
 ```text
 llm-rpc-schema-enforcer/
-├── core_engine/                 # 무상태 백엔드 코어 시스템 (LRSE 미들웨어)
-│   ├── api/                     # FastAPI 게이트웨이 및 RPC 라우터 (`main.py`)
-│   ├── schemas/                 # Pydantic V2 데이터 검증 및 클라이언트 스키마 레지스트리 (`api_models.py`, `llm_io.py`)
-│   ├── state/                   # SQLite 기반 Append-Only 영속성 계층 (`db_manager.py`)
-│   └── vm/                      # AI 프롬프트 어댑터 및 스키마 검증 코어 모듈 (`lrse_enforcer.py`, `interpreter.py`)
-├── scripts/                     # DB 초기화 및 상태 점검을 위한 CLI 유틸리티 (`init_db.py`, `check_db.py`)
-├── test_pipeline.py             # E2E 파이프라인 검증 테스트 스크립트
+├── core_engine/                 # Stateless backend core system (LRSE Middleware)
+│   ├── api/                     # FastAPI gateway and RPC router (`main.py`)
+│   ├── schemas/                 # Pydantic V2 data validation and client schema registry (`api_models.py`, `llm_io.py`)
+│   ├── state/                   # SQLite-based Append-Only persistence layer (`db_manager.py`)
+│   └── vm/                      # AI prompt adapter and schema validation core module (`lrse_enforcer.py`, `interpreter.py`)
+├── scripts/                     # CLI utilities for DB initialization and state check (`init_db.py`, `check_db.py`)
+├── test_pipeline.py             # E2E pipeline validation test script
 └── README.md
