@@ -26,9 +26,36 @@ class RpcEnforcementError(Exception):
     pass
 
 class LlmRpcSchemaEnforcer:
-    def __init__(self, api_key: str, model_name: str = "gemini-2.5-flash"):
+    # 클래스 변수로 최신 모델명 캐싱 (네트워크 지연 방지)
+    _cached_latest_model = None
+
+    def __init__(self, api_key: str, model_name: str = "auto"):
         self.client = genai.Client(api_key=api_key)
-        self.model_name = model_name
+        
+        if model_name == "auto":
+            if not LlmRpcSchemaEnforcer._cached_latest_model:
+                try:
+                    # 💡 동적 탐색: generateContent 메서드를 지원하는 flash 모델만 엄격하게 필터링
+                    valid_models = []
+                    for m in self.client.models.list():
+                        methods = getattr(m, 'supported_generation_methods', [])
+                        # Interactions API 전용 모델 등을 걸러내고, 텍스트 생성이 가능한 모델만 추출
+                        if 'generateContent' in methods and 'flash' in m.name.lower() and 'vision' not in m.name.lower():
+                            valid_models.append(m.name)
+                    
+                    if valid_models:
+                        # 버전명 기준 내림차순 정렬하여 지원 가능한 최상위 모델 추출
+                        LlmRpcSchemaEnforcer._cached_latest_model = sorted(valid_models, reverse=True)[0]
+                    else:
+                        # 💡 필터링 실패 시 안전한 구버전(3.5-flash)으로 폴백
+                        LlmRpcSchemaEnforcer._cached_latest_model = "gemini-3.5-flash"
+                except Exception as e:
+                    logger.warning(f"모델 동적 탐색 실패, 기본 모델로 폴백합니다: {e}")
+                    LlmRpcSchemaEnforcer._cached_latest_model = "gemini-3.5-flash"
+            
+            self.model_name = LlmRpcSchemaEnforcer._cached_latest_model
+        else:
+            self.model_name = model_name
 
     def call_rpc(self, context_payload: str, response_schema: Union[Type[T], Dict[str, Any]], system_instruction: str = "", max_retries: int = 3) -> Union[T, Dict[str, Any]]:
         """
@@ -43,10 +70,23 @@ class LlmRpcSchemaEnforcer:
             schema_definition = response_schema.model_json_schema()
             is_dynamic_schema = False
             
-        # 💡 [핵심 패치] Gemini SDK가 거부하는 메타데이터 키 제거 (안전한 복사본 사용)
-        gemini_safe_schema = copy.deepcopy(schema_definition)
-        if "$schema" in gemini_safe_schema:
-            del gemini_safe_schema["$schema"]
+        # 💡 [핵심 패치] Gemini SDK가 400 에러를 뱉어내는 메타데이터 키를 재귀적으로 완벽히 제거
+        def _clean_schema_for_gemini(schema_obj):
+            if isinstance(schema_obj, dict):
+                schema_obj.pop("$schema", None)
+                schema_obj.pop("title", None)
+                schema_obj.pop("default", None)
+                schema_obj.pop("additionalProperties", None)
+                schema_obj.pop("additional_properties", None)
+                
+                for key, value in list(schema_obj.items()):
+                    schema_obj[key] = _clean_schema_for_gemini(value)
+            elif isinstance(schema_obj, list):
+                for i in range(len(schema_obj)):
+                    schema_obj[i] = _clean_schema_for_gemini(schema_obj[i])
+            return schema_obj
+
+        gemini_safe_schema = _clean_schema_for_gemini(copy.deepcopy(schema_definition))
         
         strict_instruction = (
             f"{system_instruction}\n\n"

@@ -13,9 +13,23 @@ class LlmRpcRequest(BaseModel):
         ..., 
         description="LLM에 전달할 클라이언트의 컨텍스트 (예: JSON 로그, 사용자 요청, 원시 텍스트)"
     )
-    schema_name: str = Field(
-        ..., 
+    schema_name: Optional[str] = Field(
+        default=None, 
         description="LRSE 서버에 등록된 반환 Pydantic 스키마의 식별자명 (예: 'StructuredCommand')"
+    )
+    dynamic_schema_definition: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="런타임에 동적으로 주입되는 JSON Schema(Dict)",
+        json_schema_extra={
+            "example": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "confidence": {"type": "number"}
+                },
+                "required": ["summary", "confidence"]
+            }
+        }
     )
     system_instruction: Optional[str] = Field(
         default="", 

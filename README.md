@@ -3,7 +3,7 @@
 | [🇺🇸 English](README.md) | [🇰🇷 한국어](README_ko.md) | [🇯🇵 日本語](README_ja.md)
 
 ![100% AI Generated](https://img.shields.io/badge/100%25_AI_Generated-8A2BE2?style=flat&logo=googlegemini&logoColor=white)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/njkmdb/llm-rpc-schema-enforcer)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/njkmdb/llm-rpc-schema-enforcer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688.svg)](https://fastapi.tiangolo.com)
@@ -39,25 +39,42 @@ docker-compose stop
 
 ## Core Philosophy
 
-* **Deterministic Output Control:** Defines the output format through Pydantic schemas. Induces consistent results by fixing the model temperature to 0.0.
-* **Client Decoupling:** Client applications do not need to implement prompt engineering or LLM SDKs directly. They receive results by simply passing the required data schema (JSON) and context payload via API.
-* **Stateless Processing:** The internal VM interpreter does not directly modify the database (persistence layer). It maintains atomicity by processing transactions in the form of pure functions in memory.
-* **Thick vs Thin Client Dual Support:** Provides only pure translation functions (`/rpc/call`) for heavy clients that can remember and restore state internally, while maintaining a flexible architecture responsible for state mutation and persistence (`/rpc/execute`) for lightweight clients (Thin Clients) without state preservation capabilities.
-* **BYOK and Session Isolation (Secure Multi-tenancy):** Implements perfect tenant isolation by requiring clients to directly bring their personal API keys and session passwords via HTTP headers (BYOK).
-* **Error Recovery and Retry:** If the LLM's output violates the schema specifications, it re-requests by including the error details in the prompt. This prevents system interruptions and induces valid data output.
-* **User-Controlled Destructive Actions:** Ensures data integrity and system safety by fundamentally blocking destructive and irreversible logic, such as data deletion (`DESTROY_ENTITY`), at the schema level rather than leaving it to the AI's inference.
+* **Deterministic Output Control:**  
+Defines the output format through Pydantic schemas. Induces consistent results by fixing the model temperature to 0.0.
+
+* **Client Decoupling:**  
+Client applications do not need to implement prompt engineering or LLM SDKs directly. They receive results by simply passing the required data schema (JSON) and context payload via API.
+
+* **Stateless Processing & Dynamic Schema Injection:**  
+The internal VM interpreter does not directly modify the database. By interpreting the JSON Schema (`dynamic_schema_definition`) dynamically injected by the client at runtime, it can perform completely stateless data transformations without creating any state (session).
+
+* **Thick vs Thin Client Dual Support:**  
+Provides only pure translation functions (`/rpc/call`) for heavy clients that can remember and restore state internally, while maintaining a flexible architecture responsible for state mutation and persistence (`/rpc/execute`) for lightweight clients (Thin Clients) without state preservation capabilities.
+
+* **Dynamic Model Auto-discovery:**  
+Excludes version-dependent model name hardcoding. At the time of communication, it fetches the list of currently available models (`list`) and autonomously binds to the latest dedicated text generation model.
+
+* **BYOK and Session Isolation (Secure Multi-tenancy):**  
+Implements perfect tenant isolation by requiring clients to directly bring their personal API keys and session passwords via HTTP headers (BYOK).
+
+* **Error Recovery and Retry:**  
+If the LLM's output violates the schema specifications, it re-requests by including the error details in the prompt. This prevents system interruptions and induces valid data output.
+
+* **User-Controlled Destructive Actions:**  
+Ensures data integrity and system safety by fundamentally blocking destructive and irreversible logic, such as data deletion (`DESTROY_ENTITY`), at the schema level rather than leaving it to the AI's inference.
 
 ---
 
 ## Key Features
 
 ### 1. Schema Enforcement
-Extracts JSON Schema specifications from Pydantic models registered in the server registry and passes them to the LLM. Manages the returned data to comply with the predefined JSON specifications.
+Extracts JSON Schema specifications from Pydantic models registered in the server registry or based on dynamic schemas sent by the client, and passes them to the LLM. Manages the returned data to comply with the predefined JSON specifications.
 * **Defensive Adoption of Native Schema:** Primarily attempts the Gemini API's `response_schema`, but maximizes stability by adopting a dual structure that immediately falls back to the existing text parsing and retry logic to prevent API errors caused by complex schema constraints.
 
 ### 2. Universal RPC Gateway
 Provides a FastAPI-based API gateway. Various client apps can request AI inference results using only domain schema names and contexts.
 * **Endpoint Separation Design:** Depending on the nature of the client, it separates and provides a stateless translation endpoint (`/rpc/call`) that does not require state preservation, and a stateful endpoint (`/rpc/execute`) that directly mutates and persists state.
+* **Secure Fallback Routing:** Supports a 3-step hierarchical routing when a client requests, safely finding the schema in the priority of: 1) Dynamic schema definition -> 2) Session DB snapshot dynamic schema -> 3) Internal static registry.
 * **Securing API Schema Flexibility:** Eliminated client dependencies by changing unnecessary `api_key` and `model_name` parameters to `Optional` in the `/api/v1/session/init` endpoint.
 
 ### 3. Auto Retry Logic (Retry Loop)
@@ -70,6 +87,10 @@ Does not directly overwrite (UPDATE) data, but changes the pointer after replica
 
 ---
 ## Changelog
+
+* **2026.09.01 (v0.4.0)**  
+・Supported completely stateless architecture through runtime dynamic schema (`dynamic_schema_definition`) injection  
+・Built priority-based fallback routing (dynamic schema -> session DB -> registry)
 
 * **2026.08.30 (v0.3.1)**  
 ・Established a standalone execution environment based on Docker (`Dockerfile`, `docker-compose.yml`)  
