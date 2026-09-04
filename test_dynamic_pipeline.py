@@ -2,8 +2,8 @@ import os
 import json
 import requests
 
-# 💡 테스트용 고정 세션 비밀번호 설정
-TEST_SESSION_SECRET = "dynamic_secret_pass_123!"
+# 💡 테스트용 고정 세션 비밀번호 설정 (환경변수 폴백)
+TEST_SESSION_SECRET = os.getenv("TEST_SESSION_SECRET", "your_test_secret_here")
 
 # =====================================================================
 # 1. LRSE API 엔드포인트 호출 (Dynamic Schema E2E Test)

@@ -4,8 +4,8 @@ import requests
 from core_engine.state.db_manager import StateManager
 from core_engine.schemas.llm_io import UniversalEntity
 
-# 💡 테스트용 고정 세션 비밀번호 설정
-TEST_SESSION_SECRET = "my_super_secret_password_123!"
+# 💡 테스트용 고정 세션 비밀번호 설정 (환경변수 폴백)
+TEST_SESSION_SECRET = os.getenv("TEST_SESSION_SECRET", "your_test_secret_here")
 
 # =====================================================================
 # 1. DB 초기 세팅 (Seed Data)

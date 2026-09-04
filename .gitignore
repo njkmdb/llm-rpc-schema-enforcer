@@ -1,6 +1,14 @@
 # ==========================================
 # ==========================================
 
+# 환경 변수
+.env
+.env.local
+
+# 로컬 테스트 및 운영 과정에서 쌓인 트랜잭션 DB 스냅샷
+lrse_state.db
+session_metadata.db
+
 # 1. Python / Environment
 venv/
 .venv/

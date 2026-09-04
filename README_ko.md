@@ -91,6 +91,7 @@ Pydantic 검증 실패(`ValidationError`) 발생 시, 빈 데이터를 반환하
 * **2026.09.01 (v0.4.0)**  
 ・런타임 동적 스키마(`dynamic_schema_definition`) 주입을 통한 완전한 무상태(Stateless) 아키텍처 지원  
 ・우선순위 기반(동적 스키마 -> 세션 DB -> 레지스트리) 폴백 라우팅 구축
+
 * **2026.08.30 (v0.3.1)**  
 ・도커(Docker) 기반 독립 실행 환경 구축 (`Dockerfile`, `docker-compose.yml`)  
 ・컨테이너 환경에서의 SQLite 상태 영속성(Persistence) 보장을 위한 볼륨 마운트 적용  
