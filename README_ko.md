@@ -88,6 +88,10 @@ Pydantic 검증 실패(`ValidationError`) 발생 시, 빈 데이터를 반환하
 ---
 ## 업데이트 내역 (Changelog)
 
+* **2026.09.22 (v0.4.1)**  
+・클라이언트 분산 추적을 위한 `X-Correlation-ID` 헤더 패스스루 추가  
+・RPC 응답 `meta` 필드에 토큰 소모량, 응답 지연 시간(Latency), 재시도 횟수 반환 추가  
+
 * **2026.09.01 (v0.4.0)**  
 ・런타임 동적 스키마(`dynamic_schema_definition`) 주입을 통한 완전한 무상태(Stateless) 아키텍처 지원  
 ・우선순위 기반(동적 스키마 -> 세션 DB -> 레지스트리) 폴백 라우팅 구축

@@ -10,10 +10,11 @@ import json
 import jsonschema
 import copy
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
-from typing import TypeVar, Type, Union, Dict, Any
+from typing import TypeVar, Type, Union, Dict, Any, Tuple
 from pydantic import BaseModel, ValidationError
 from google import genai
 from google.genai import types
+from core_engine.schemas.api_models import LlmRpcMetaData
 
 logger = logging.getLogger("LRSE_Enforcer")
 logger.setLevel(logging.INFO)
@@ -26,41 +27,15 @@ class RpcEnforcementError(Exception):
     pass
 
 class LlmRpcSchemaEnforcer:
-    # 클래스 변수로 최신 모델명 캐싱 (네트워크 지연 방지)
-    _cached_latest_model = None
-
-    def __init__(self, api_key: str, model_name: str = "auto"):
+    def __init__(self, api_key: str, model_name: str = "gemini-2.5-flash"):
         self.client = genai.Client(api_key=api_key)
-        
-        if model_name == "auto":
-            if not LlmRpcSchemaEnforcer._cached_latest_model:
-                try:
-                    # 💡 동적 탐색: generateContent 메서드를 지원하는 flash 모델만 엄격하게 필터링
-                    valid_models = []
-                    for m in self.client.models.list():
-                        methods = getattr(m, 'supported_generation_methods', [])
-                        # Interactions API 전용 모델 등을 걸러내고, 텍스트 생성이 가능한 모델만 추출
-                        if 'generateContent' in methods and 'flash' in m.name.lower() and 'vision' not in m.name.lower():
-                            valid_models.append(m.name)
-                    
-                    if valid_models:
-                        # 버전명 기준 내림차순 정렬하여 지원 가능한 최상위 모델 추출
-                        LlmRpcSchemaEnforcer._cached_latest_model = sorted(valid_models, reverse=True)[0]
-                    else:
-                        # 💡 필터링 실패 시 안전한 구버전(3.5-flash)으로 폴백
-                        LlmRpcSchemaEnforcer._cached_latest_model = "gemini-3.5-flash"
-                except Exception as e:
-                    logger.warning(f"모델 동적 탐색 실패, 기본 모델로 폴백합니다: {e}")
-                    LlmRpcSchemaEnforcer._cached_latest_model = "gemini-3.5-flash"
-            
-            self.model_name = LlmRpcSchemaEnforcer._cached_latest_model
-        else:
-            self.model_name = model_name
+        self.model_name = model_name
 
-    def call_rpc(self, context_payload: str, response_schema: Union[Type[T], Dict[str, Any]], system_instruction: str = "", max_retries: int = 3) -> Union[T, Dict[str, Any]]:
+    def call_rpc(self, context_payload: str, response_schema: Union[Type[T], Dict[str, Any]], system_instruction: str = "", max_retries: int = 3, max_cumulative_tokens: int = 20000) -> Tuple[Union[T, Dict[str, Any]], LlmRpcMetaData]:
         """
         LLM에 RPC 요청을 보내고, 지정된 스키마로 100% 검증된 데이터 객체를 반환합니다.
         실패 시 에러 컨텍스트를 주입하여 자가 교정(Self-correction) 재시도를 수행합니다.
+        누적 토큰 사용량이 max_cumulative_tokens를 초과하면 즉시 서킷 브레이커가 작동합니다.
         """
         # 1. 스키마 추출 분기 (Pydantic 모델 vs 원시 JSON Schema 딕셔너리)
         if isinstance(response_schema, dict):
@@ -70,23 +45,10 @@ class LlmRpcSchemaEnforcer:
             schema_definition = response_schema.model_json_schema()
             is_dynamic_schema = False
             
-        # 💡 [핵심 패치] Gemini SDK가 400 에러를 뱉어내는 메타데이터 키를 재귀적으로 완벽히 제거
-        def _clean_schema_for_gemini(schema_obj):
-            if isinstance(schema_obj, dict):
-                schema_obj.pop("$schema", None)
-                schema_obj.pop("title", None)
-                schema_obj.pop("default", None)
-                schema_obj.pop("additionalProperties", None)
-                schema_obj.pop("additional_properties", None)
-                
-                for key, value in list(schema_obj.items()):
-                    schema_obj[key] = _clean_schema_for_gemini(value)
-            elif isinstance(schema_obj, list):
-                for i in range(len(schema_obj)):
-                    schema_obj[i] = _clean_schema_for_gemini(schema_obj[i])
-            return schema_obj
-
-        gemini_safe_schema = _clean_schema_for_gemini(copy.deepcopy(schema_definition))
+        # 💡 [핵심 패치] Gemini SDK가 거부하는 메타데이터 키 제거 (안전한 복사본 사용)
+        gemini_safe_schema = copy.deepcopy(schema_definition)
+        if "$schema" in gemini_safe_schema:
+            del gemini_safe_schema["$schema"]
         
         strict_instruction = (
             f"{system_instruction}\n\n"
@@ -98,6 +60,13 @@ class LlmRpcSchemaEnforcer:
 
         last_error = None
         current_payload = context_payload
+        
+        # 관측성 메트릭 변수 초기화
+        start_time = time.perf_counter()
+        cumulative_prompt_tokens = 0
+        cumulative_completion_tokens = 0
+        cumulative_total_tokens = 0
+        retry_count = 0
 
         # 2. 결함 허용(Fault Tolerance)을 위한 다중 재시도 루프
         for attempt in range(1, max_retries + 1):
@@ -114,16 +83,41 @@ class LlmRpcSchemaEnforcer:
                     )
                 )
                 
+                # 💡 [메트릭 수집 및 서킷 브레이커] 토큰 사용량 누적 산출 (검증 전 우선 실행)
+                if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                    p_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
+                    c_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+                    cumulative_prompt_tokens += p_tokens
+                    cumulative_completion_tokens += c_tokens
+                    cumulative_total_tokens += (p_tokens + c_tokens)
+                
+                # 서킷 브레이커: 누적 토큰 상한선 도달 시 루프 즉시 차단 (Abort)
+                if cumulative_total_tokens > max_cumulative_tokens:
+                    logger.error(f"❌ [LRSE Circuit Breaker] Max Cumulative Tokens exceeded ({cumulative_total_tokens} > {max_cumulative_tokens})")
+                    raise RpcEnforcementError(f"Circuit Breaker Abort: 누적 토큰({cumulative_total_tokens})이 상한선({max_cumulative_tokens})을 초과했습니다.")
+                
                 # 💡 [핵심 방어선] 검증 방식 분기 처리 (검증 시에는 원본 스키마 사용)
                 if is_dynamic_schema:
                     # 동적 스키마의 경우 jsonschema 패키지를 통한 완벽한 규격 검증
                     parsed_json = json.loads(response.text)
                     jsonschema.validate(instance=parsed_json, schema=schema_definition)
-                    return parsed_json
+                    result_data = parsed_json
                 else:
-                    return response_schema.model_validate_json(response.text)
+                    result_data = response_schema.model_validate_json(response.text)
+                    
+                # 💡 [성공 리턴] 검증 통과 시 메타데이터와 함께 반환
+                end_time = time.perf_counter()
+                meta_data = LlmRpcMetaData(
+                    latency_ms=int((end_time - start_time) * 1000),
+                    prompt_tokens=cumulative_prompt_tokens,
+                    completion_tokens=cumulative_completion_tokens,
+                    total_tokens=cumulative_total_tokens,
+                    retry_count=retry_count
+                )
+                return result_data, meta_data
                 
             except (ValidationError, JsonSchemaValidationError, json.JSONDecodeError) as val_err:
+                retry_count += 1
                 last_error = val_err
                 logger.warning(f"[LRSE Security Block] 시도 {attempt}/{max_retries} - 스키마 규격 위반 감지: {val_err}")
                 
@@ -131,7 +125,12 @@ class LlmRpcSchemaEnforcer:
                 current_payload += f"\n\n[SYSTEM ERROR IN PREVIOUS ATTEMPT] You violated the schema. Error details: {val_err}. Fix the JSON structure."
                 time.sleep(1)
                 
+            except RpcEnforcementError:
+                # 서킷 브레이커 에러 등은 재시도 없이 즉시 상위로 전파
+                raise
+                
             except Exception as e:
+                retry_count += 1
                 last_error = e
                 logger.warning(f"[LRSE Network Exception] 시도 {attempt}/{max_retries} - 통신 오류: {e}")
                 time.sleep(2)

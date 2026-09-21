@@ -6,6 +6,15 @@ from typing import Dict, Any, Optional, List, Union
 # 클라이언트 앱과 LLM 간의 완벽한 RPC 인터페이스를 제공하는 스키마입니다.
 # =====================================================================
 
+class LlmRpcMetaData(BaseModel):
+    """LRSE 시스템 옵저버빌리티를 위한 분산 추적 및 메트릭 메타데이터"""
+    latency_ms: int = Field(default=0, description="LLM 총 추론 및 검증 소요 시간(ms)")
+    prompt_tokens: int = Field(default=0, description="누적 프롬프트 토큰 사용량")
+    completion_tokens: int = Field(default=0, description="누적 완료 토큰 사용량")
+    total_tokens: int = Field(default=0, description="누적 총 토큰 사용량")
+    retry_count: int = Field(default=0, description="오토 콜렉션(자가 교정) 재시도 횟수")
+    correlation_id: Optional[str] = Field(default=None, description="분산 추적용 Correlation ID")
+
 class LlmRpcRequest(BaseModel):
     """LRSE 미들웨어에 LLM 추론을 요청하는 RPC(Remote Procedure Call) 페이로드"""
     
@@ -13,23 +22,9 @@ class LlmRpcRequest(BaseModel):
         ..., 
         description="LLM에 전달할 클라이언트의 컨텍스트 (예: JSON 로그, 사용자 요청, 원시 텍스트)"
     )
-    schema_name: Optional[str] = Field(
-        default=None, 
+    schema_name: str = Field(
+        ..., 
         description="LRSE 서버에 등록된 반환 Pydantic 스키마의 식별자명 (예: 'StructuredCommand')"
-    )
-    dynamic_schema_definition: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="런타임에 동적으로 주입되는 JSON Schema(Dict)",
-        json_schema_extra={
-            "example": {
-                "type": "object",
-                "properties": {
-                    "summary": {"type": "string"},
-                    "confidence": {"type": "number"}
-                },
-                "required": ["summary", "confidence"]
-            }
-        }
     )
     system_instruction: Optional[str] = Field(
         default="", 
@@ -50,6 +45,10 @@ class LlmRpcResponse(BaseModel):
     message: Optional[str] = Field(
         None, 
         description="성공 로그 또는 오류 발생 시의 상세 에러 메시지"
+    )
+    meta: Optional[LlmRpcMetaData] = Field(
+        default=None, 
+        description="옵저버빌리티 메타데이터 (토큰, 레이턴시, 추적ID 등)"
     )
 
 class LlmSessionInitRequest(BaseModel):

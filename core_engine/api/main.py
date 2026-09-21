@@ -1,6 +1,6 @@
 import logging
-import jsonschema
-from fastapi import FastAPI, HTTPException, Depends, Header
+import uuid
+from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -35,13 +35,25 @@ app.add_middleware(
 )
 
 # =====================================================================
+# 💡 [Observability Middleware] Correlation ID Pass-through
+# =====================================================================
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
+    request.state.correlation_id = correlation_id
+    
+    response = await call_next(request)
+    # 최종 응답 헤더에 추적 ID를 패스스루하여 클라이언트가 인지할 수 있도록 보장
+    response.headers["X-Correlation-ID"] = correlation_id
+    return response
+
+# =====================================================================
 # 💡 [Dependency Injection] Auth & BYOK Enforcer
 # =====================================================================
 
 def get_llm_enforcer(
     x_gemini_api_key: str = Header(..., description="사용자 개인 발급 Gemini API Key"),
-    # 💡 하드코딩 제거: API 기본 모델을 동적 탐색("auto")으로 변경
-    x_model_name: str = Header(default="auto", description="클라이언트가 선택한 LLM 모델명")
+    x_model_name: str = Header(default="gemini-1.5-pro", description="클라이언트가 선택한 LLM 모델명")
 ) -> LlmRpcSchemaEnforcer:
     try:
         return LlmRpcSchemaEnforcer(api_key=x_gemini_api_key, model_name=x_model_name) 
@@ -74,6 +86,7 @@ SCHEMA_REGISTRY = {
 @app.post("/api/v1/rpc/call", response_model=LlmRpcResponse)
 async def call_llm_rpc_endpoint(
     request: LlmRpcRequest, 
+    http_request: Request,
     verified_session_id: str = Depends(verify_session_access),
     enforcer: LlmRpcSchemaEnforcer = Depends(get_llm_enforcer)
 ):
@@ -82,46 +95,38 @@ async def call_llm_rpc_endpoint(
     DB에 저장된 동적 스키마(JSON Schema) 또는 내부 레지스트리를 활용합니다.
     """
     try:
-        target_schema = None
+        corr_id = http_request.state.correlation_id
+        logger.info(f"[{corr_id}] Starting Read-Only RPC Call for session {verified_session_id}")
         
-        # 💡 [우선순위 1] 동적 스키마 주입 및 Fail-Safe 검증
-        if request.dynamic_schema_definition:
-            try:
-                jsonschema.Draft202012Validator.check_schema(request.dynamic_schema_definition)
-                target_schema = request.dynamic_schema_definition
-            except jsonschema.exceptions.SchemaError as schema_err:
-                raise ValueError(f"동적 주입된 JSON Schema의 문법이 올바르지 않습니다: {str(schema_err)}")
-                
-        # 💡 [우선순위 2 & 3] 세션 DB 조회 우회 폴백 및 정적 레지스트리 검색
-        elif request.schema_name:
-            # 1. DB에서 최신 상태 스냅샷 전체 조회
-            _, current_state = state_manager.get_latest_state(verified_session_id)
-            
-            # 2. 상태(페이로드) 내부의 entities 리스트에서 요청한 스키마 검색
-            schema_entity_dict = None
-            if current_state and "entities" in current_state:
-                for ent in current_state["entities"]:
-                    if ent.get("id") == request.schema_name:
-                        schema_entity_dict = ent
-                        break
-            
-            # 3. 스키마 할당 (DB 동적 스키마 딕셔너리 -> 레지스트리 폴백)
-            if schema_entity_dict and schema_entity_dict.get("type") == "schema":
-                target_schema = schema_entity_dict.get("attributes") 
-            elif request.schema_name in SCHEMA_REGISTRY:
-                target_schema = SCHEMA_REGISTRY[request.schema_name] 
-            else:
-                raise ValueError(f"스키마 '{request.schema_name}'를 DB(세션) 또는 레지스트리에서 찾을 수 없습니다.")
+        # 1. DB에서 최신 상태 스냅샷 전체 조회
+        _, current_state = state_manager.get_latest_state(verified_session_id)
+        
+        # 2. 상태(페이로드) 내부의 entities 리스트에서 요청한 스키마 검색
+        schema_entity_dict = None
+        if current_state and "entities" in current_state:
+            for ent in current_state["entities"]:
+                if ent.get("id") == request.schema_name:
+                    schema_entity_dict = ent
+                    break
+        
+        # 3. 스키마 할당 (DB 동적 스키마 딕셔너리 최우선 -> 레지스트리 폴백)
+        if schema_entity_dict and schema_entity_dict.get("type") == "schema":
+            target_schema = schema_entity_dict.get("attributes") # 원시 JSON Schema 딕셔너리 할당
+        elif request.schema_name in SCHEMA_REGISTRY:
+            target_schema = SCHEMA_REGISTRY[request.schema_name] # 폴백: 코어 Pydantic 스키마
         else:
-            raise ValueError("dynamic_schema_definition 또는 schema_name 중 하나는 반드시 제공되어야 합니다.")
+            raise ValueError(f"스키마 '{request.schema_name}'를 DB(세션) 또는 레지스트리에서 찾을 수 없습니다.")
             
-        # 4. Enforcer 호출
-        validated_obj_or_dict = enforcer.call_rpc(
+        # 4. Enforcer 호출 (메타데이터 분리 추출 및 서킷 브레이커 설정)
+        validated_obj_or_dict, meta_data = enforcer.call_rpc(
             context_payload=request.context_payload,
             response_schema=target_schema,
             system_instruction=request.system_instruction,
-            max_retries=3
+            max_retries=3,
+            max_cumulative_tokens=20000
         )
+        
+        meta_data.correlation_id = corr_id
         
         # 반환값이 Pydantic 모델이면 dump, 딕셔너리(동적 스키마 결과)면 그대로 반환
         final_data = validated_obj_or_dict.model_dump() if hasattr(validated_obj_or_dict, "model_dump") else validated_obj_or_dict
@@ -129,7 +134,8 @@ async def call_llm_rpc_endpoint(
         return LlmRpcResponse(
             status="success",
             validated_data=final_data,
-            message="스키마 강제화 및 데이터 검증 완료."
+            message="스키마 강제화 및 데이터 검증 완료.",
+            meta=meta_data
         )
         
     except ValueError as val_err:
@@ -148,6 +154,7 @@ async def call_llm_rpc_endpoint(
 @app.post("/api/v1/rpc/execute", response_model=LlmRpcResponse)
 async def execute_stateful_rpc(
     request: LlmRpcRequest, 
+    http_request: Request,
     verified_session_id: str = Depends(verify_session_access),
     enforcer: LlmRpcSchemaEnforcer = Depends(get_llm_enforcer)
 ):
@@ -155,12 +162,18 @@ async def execute_stateful_rpc(
     [Stateful] LLM의 추론 결과를 기반으로 시스템 상태(Entity)를 변이하고 DB에 영속화합니다.
     """
     try:
-        command_batch = enforcer.call_rpc(
+        corr_id = http_request.state.correlation_id
+        logger.info(f"[{corr_id}] Starting Stateful RPC Execute for session {verified_session_id}")
+        
+        command_batch, meta_data = enforcer.call_rpc(
             context_payload=request.context_payload,
             response_schema=StructuredCommand,
             system_instruction=request.system_instruction,
-            max_retries=3
+            max_retries=3,
+            max_cumulative_tokens=20000
         )
+        
+        meta_data.correlation_id = corr_id
 
         execution_report, modified_entities = vm_interpreter.execute(
             session_id=verified_session_id,
@@ -198,7 +211,8 @@ async def execute_stateful_rpc(
                 "report": execution_report,
                 "modified_entities": [ent.model_dump() for ent in modified_entities]
             },
-            message="상태 변이 및 영속화가 완료되었습니다."
+            message="상태 변이 및 영속화가 완료되었습니다.",
+            meta=meta_data
         )
 
     except ValueError as val_err:

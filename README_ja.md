@@ -3,7 +3,7 @@
 | [🇺🇸 English](README.md) | [🇰🇷 한국어](README_ko.md) | [🇯🇵 日本語](README_ja.md)
 
 ![100% AI Generated](https://img.shields.io/badge/100%25_AI_Generated-8A2BE2?style=flat&logo=googlegemini&logoColor=white)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/njkmdb/llm-rpc-schema-enforcer)
+[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://github.com/njkmdb/llm-rpc-schema-enforcer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688.svg)](https://fastapi.tiangolo.com)
@@ -88,6 +88,10 @@ Pydanticの検証失敗 (`ValidationError`) 発生時、空のデータを返す
 
 ---
 ## アップデート履歴 (Changelog)
+
+* **2026.09.22 (v0.4.1)**  
+・クライアント分散トレーシングのための `X-Correlation-ID` ヘッダーのパススルーを追加  
+・RPC応答の `meta` フィールドにトークン消費量、応答遅延時間 (Latency)、再試行回数の返却を追加  
 
 * **2026.09.01 (v0.4.0)**  
 ・ランタイム動的スキーマ (`dynamic_schema_definition`) 注入による完全なステートレス (Stateless) アーキテクチャのサポート  
