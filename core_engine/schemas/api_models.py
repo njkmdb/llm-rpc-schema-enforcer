@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Dict, Any, Optional, List, Union
 
 # =====================================================================
@@ -22,14 +22,25 @@ class LlmRpcRequest(BaseModel):
         ..., 
         description="LLM에 전달할 클라이언트의 컨텍스트 (예: JSON 로그, 사용자 요청, 원시 텍스트)"
     )
-    schema_name: str = Field(
-        ..., 
-        description="LRSE 서버에 등록된 반환 Pydantic 스키마의 식별자명 (예: 'StructuredCommand')"
+    schema_name: Optional[str] = Field(
+        default=None, 
+        description="LRSE 서버에 등록된 반환 Pydantic 스키마 또는 DB 스키마 엔티티의 식별자명 (예: 'StructuredCommand')"
+    )
+    dynamic_schema_definition: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="런타임에 클라이언트가 직접 주입하는 원시 JSON Schema 딕셔너리 (완전 무상태 Stateless 처리용)"
     )
     system_instruction: Optional[str] = Field(
         default="", 
         description="모델의 역할을 규정하고 행동을 구속하는 추가 시스템 지시어"
     )
+
+    @model_validator(mode="after")
+    def validate_schema_target(self) -> "LlmRpcRequest":
+        """정적/세션 스키마 이름 또는 런타임 동적 스키마 정의 중 최소 하나는 제공되어야 합니다."""
+        if not self.schema_name and not self.dynamic_schema_definition:
+            raise ValueError("Either 'schema_name' or 'dynamic_schema_definition' must be provided.")
+        return self
 
 class LlmRpcResponse(BaseModel):
     """LRSE 미들웨어를 통과하여 스키마 검증(Enforcement)이 100% 완료된 응답"""

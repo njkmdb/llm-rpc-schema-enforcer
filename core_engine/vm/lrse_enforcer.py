@@ -31,7 +31,36 @@ class LlmRpcSchemaEnforcer:
         self.client = genai.Client(api_key=api_key)
         self.model_name = model_name
 
-    def call_rpc(self, context_payload: str, response_schema: Union[Type[T], Dict[str, Any]], system_instruction: str = "", max_retries: int = 3, max_cumulative_tokens: int = 20000) -> Tuple[Union[T, Dict[str, Any]], LlmRpcMetaData]:
+    @staticmethod
+    def _sanitize_schema_for_gemini(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Gemini SDK의 response_schema 파라미터가 거부하는 JSON Schema 메타 키워드
+        ($schema, additionalProperties)를 중첩 구조 전체에서 재귀적으로 제거합니다.
+        """
+        cleaned = copy.deepcopy(schema_dict)
+        unsupported_keys = {"$schema", "additionalProperties"}
+
+        def _strip_unsupported(obj: Any) -> Any:
+            if isinstance(obj, dict):
+                return {
+                    k: _strip_unsupported(v)
+                    for k, v in obj.items()
+                    if k not in unsupported_keys
+                }
+            elif isinstance(obj, list):
+                return [_strip_unsupported(item) for item in obj]
+            return obj
+
+        return _strip_unsupported(cleaned)
+
+    def call_rpc(
+        self,
+        context_payload: str,
+        response_schema: Union[Type[T], Dict[str, Any]],
+        system_instruction: str = "",
+        max_retries: int = 3,
+        max_cumulative_tokens: int = 20000
+    ) -> Tuple[Union[T, Dict[str, Any]], LlmRpcMetaData]:
         """
         LLM에 RPC 요청을 보내고, 지정된 스키마로 100% 검증된 데이터 객체를 반환합니다.
         실패 시 에러 컨텍스트를 주입하여 자가 교정(Self-correction) 재시도를 수행합니다.
@@ -45,21 +74,20 @@ class LlmRpcSchemaEnforcer:
             schema_definition = response_schema.model_json_schema()
             is_dynamic_schema = False
             
-        # 💡 [핵심 패치] Gemini SDK가 거부하는 메타데이터 키 제거 (안전한 복사본 사용)
-        gemini_safe_schema = copy.deepcopy(schema_definition)
-        if "$schema" in gemini_safe_schema:
-            del gemini_safe_schema["$schema"]
+        # 💡 [핵심 패치] Gemini SDK가 거부하는 메타데이터 키 재귀적 제거 (안전한 복사본 사용)
+        gemini_safe_schema = self._sanitize_schema_for_gemini(schema_definition)
         
         strict_instruction = (
             f"{system_instruction}\n\n"
             "STRICT ENFORCEMENT RULES:\n"
             "1. You are a backend RPC handler. You MUST return ONLY a valid JSON object.\n"
-            f"2. Your response MUST strictly adhere to the following JSON Schema:\n{schema_definition}\n"
+            f"2. Your response MUST strictly adhere to the following JSON Schema:\n{json.dumps(schema_definition, ensure_ascii=False)}\n"
             "3. Do not include markdown formatting or extra text."
         )
 
         last_error = None
         current_payload = context_payload
+        use_native_schema = True
         
         # 관측성 메트릭 변수 초기화
         start_time = time.perf_counter()
@@ -71,22 +99,25 @@ class LlmRpcSchemaEnforcer:
         # 2. 결함 허용(Fault Tolerance)을 위한 다중 재시도 루프
         for attempt in range(1, max_retries + 1):
             try:
+                config_kwargs: Dict[str, Any] = {
+                    "system_instruction": strict_instruction,
+                    "response_mime_type": "application/json",
+                    "temperature": 0.0,  # 환각 방어를 위한 온도 고정
+                }
+                # 네이티브 스키마 활성화 상태일 때만 정제된 스키마 주입 (실패 시 프롬프트 모드로 Fallback)
+                if use_native_schema:
+                    config_kwargs["response_schema"] = gemini_safe_schema
+
                 response = self.client.models.generate_content(
                     model=self.model_name,
                     contents=current_payload,
-                    config=types.GenerateContentConfig(
-                        system_instruction=strict_instruction,
-                        response_mime_type="application/json", 
-                        temperature=0.0, # 환각 방어를 위한 온도 고정
-                        # 💡 원본 대신 정제된 스키마 전달
-                        response_schema=gemini_safe_schema 
-                    )
+                    config=types.GenerateContentConfig(**config_kwargs)
                 )
                 
                 # 💡 [메트릭 수집 및 서킷 브레이커] 토큰 사용량 누적 산출 (검증 전 우선 실행)
                 if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                    p_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
-                    c_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+                    p_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0) or 0
+                    c_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0) or 0
                     cumulative_prompt_tokens += p_tokens
                     cumulative_completion_tokens += c_tokens
                     cumulative_total_tokens += (p_tokens + c_tokens)
@@ -132,8 +163,13 @@ class LlmRpcSchemaEnforcer:
             except Exception as e:
                 retry_count += 1
                 last_error = e
-                logger.warning(f"[LRSE Network Exception] 시도 {attempt}/{max_retries} - 통신 오류: {e}")
-                time.sleep(2)
+                # 네이티브 response_schema 제약으로 인한 API 호출 실패 시, 다음 시도부터는 프롬프트 검증 모드로 Fallback
+                if use_native_schema:
+                    logger.warning(f"[LRSE Native Schema Fallback] 네이티브 스키마 호출 예외 감지 ({e}). 프롬프트 기반 JSON 검증 모드로 전환합니다.")
+                    use_native_schema = False
+                else:
+                    logger.warning(f"[LRSE Network Exception] 시도 {attempt}/{max_retries} - 통신 오류: {e}")
+                time.sleep(1)
                 
         logger.error(f"❌ [LRSE FATAL] {max_retries}회 재시도 실패. RPC 호출을 강제 종료합니다.")
         raise RpcEnforcementError(f"Failed to execute LLM RPC call after {max_retries} attempts.") from last_error

@@ -53,7 +53,7 @@ async def correlation_id_middleware(request: Request, call_next):
 
 def get_llm_enforcer(
     x_gemini_api_key: str = Header(..., description="사용자 개인 발급 Gemini API Key"),
-    x_model_name: str = Header(default="gemini-1.5-pro", description="클라이언트가 선택한 LLM 모델명")
+    x_model_name: str = Header(default="gemini-2.5-flash", description="클라이언트가 선택한 LLM 모델명")
 ) -> LlmRpcSchemaEnforcer:
     try:
         return LlmRpcSchemaEnforcer(api_key=x_gemini_api_key, model_name=x_model_name) 
@@ -91,37 +91,46 @@ async def call_llm_rpc_endpoint(
     enforcer: LlmRpcSchemaEnforcer = Depends(get_llm_enforcer)
 ):
     """
-    [Read-Only] 상태를 변경하지 않는 순수 데이터 조회/생성용 RPC 호출.
-    DB에 저장된 동적 스키마(JSON Schema) 또는 내부 레지스트리를 활용합니다.
+    [Read-Only / Stateless] 상태를 변경하지 않는 순수 데이터 조회/생성용 RPC 호출.
+    1) 런타임 동적 스키마 -> 2) DB 세션 동적 스키마 -> 3) 내부 정적 레지스트리 순으로 폴백 라우팅합니다.
     """
     try:
         corr_id = http_request.state.correlation_id
         logger.info(f"[{corr_id}] Starting Read-Only RPC Call for session {verified_session_id}")
         
-        # 1. DB에서 최신 상태 스냅샷 전체 조회
-        _, current_state = state_manager.get_latest_state(verified_session_id)
-        
-        # 2. 상태(페이로드) 내부의 entities 리스트에서 요청한 스키마 검색
-        schema_entity_dict = None
-        if current_state and "entities" in current_state:
-            for ent in current_state["entities"]:
-                if ent.get("id") == request.schema_name:
-                    schema_entity_dict = ent
-                    break
-        
-        # 3. 스키마 할당 (DB 동적 스키마 딕셔너리 최우선 -> 레지스트리 폴백)
-        if schema_entity_dict and schema_entity_dict.get("type") == "schema":
-            target_schema = schema_entity_dict.get("attributes") # 원시 JSON Schema 딕셔너리 할당
-        elif request.schema_name in SCHEMA_REGISTRY:
-            target_schema = SCHEMA_REGISTRY[request.schema_name] # 폴백: 코어 Pydantic 스키마
+        target_schema = None
+
+        # [1순위] 클라이언트가 요청 페이로드에 직접 주입한 런타임 동적 스키마 (완전 무상태 처리)
+        if request.dynamic_schema_definition:
+            target_schema = request.dynamic_schema_definition
+            logger.info(f"[{corr_id}] Schema resolved via Priority 1: Runtime dynamic_schema_definition")
         else:
-            raise ValueError(f"스키마 '{request.schema_name}'를 DB(세션) 또는 레지스트리에서 찾을 수 없습니다.")
+            # [2순위] DB에서 최신 상태 스냅샷 전체 조회 후 entities 리스트에서 요청한 스키마 검색
+            _, current_state = state_manager.get_latest_state(verified_session_id)
+            schema_entity_dict = None
+            if current_state and "entities" in current_state:
+                for ent in current_state["entities"]:
+                    if ent.get("id") == request.schema_name:
+                        schema_entity_dict = ent
+                        break
+            
+            if schema_entity_dict and schema_entity_dict.get("type") == "schema":
+                target_schema = schema_entity_dict.get("attributes")
+                logger.info(f"[{corr_id}] Schema '{request.schema_name}' resolved via Priority 2: Session DB Snapshot")
+            # [3순위] 서버 내부 정적 SCHEMA_REGISTRY 폴백
+            elif request.schema_name in SCHEMA_REGISTRY:
+                target_schema = SCHEMA_REGISTRY[request.schema_name]
+                logger.info(f"[{corr_id}] Schema '{request.schema_name}' resolved via Priority 3: Static Registry")
+            else:
+                raise ValueError(
+                    f"스키마 '{request.schema_name}'를 런타임 페이로드, DB(세션), 또는 레지스트리에서 찾을 수 없습니다."
+                )
             
         # 4. Enforcer 호출 (메타데이터 분리 추출 및 서킷 브레이커 설정)
         validated_obj_or_dict, meta_data = enforcer.call_rpc(
             context_payload=request.context_payload,
             response_schema=target_schema,
-            system_instruction=request.system_instruction,
+            system_instruction=request.system_instruction or "",
             max_retries=3,
             max_cumulative_tokens=20000
         )
@@ -168,7 +177,7 @@ async def execute_stateful_rpc(
         command_batch, meta_data = enforcer.call_rpc(
             context_payload=request.context_payload,
             response_schema=StructuredCommand,
-            system_instruction=request.system_instruction,
+            system_instruction=request.system_instruction or "",
             max_retries=3,
             max_cumulative_tokens=20000
         )
