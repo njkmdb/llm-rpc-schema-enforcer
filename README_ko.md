@@ -2,7 +2,7 @@
 
 | [🇺🇸 English](README.md) | [🇰🇷 한국어](README_ko.md) | [🇯🇵 日本語](README_ja.md)
 
-![100% AI Generated](https://img.shields.io/badge/100%25_AI_Generated-8A2BE2?style=flat&logo=googlegemini&logoColor=white)
+![Human-Architected | 100% AI-Coded](https://img.shields.io/badge/Human--Architected-100%25_AI--Coded-8A2BE2?style=flat&logo=googlegemini&logoColor=white)
 [![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/njkmdb/llm-rpc-schema-enforcer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
