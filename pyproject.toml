@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-rpc-schema-enforcer"
+version = "0.4.1"
+description = "LLM 호출을 스키마 기반의 백엔드 RPC로 취급하여 규격화된 JSON 데이터로 변환하는 미들웨어"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.100.0",
+    "pydantic>=2.0.0",
+    "google-genai>=0.1.0",
+    "uvicorn>=0.23.0",
+    "requests>=2.31.0",
+    "jsonschema>=4.19.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.26.0",
+    "ruff>=0.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+# 기존 코어 코드의 스타일을 변경하지 않고 치명적 구문/런타임 오류만 검사
+select = ["E9", "F63", "F7", "F82"]
